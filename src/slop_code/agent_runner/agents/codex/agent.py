@@ -225,16 +225,22 @@ class CodexAgent(Agent):
         model: ModelDefinition,
         credential: ProviderCredential,
     ) -> CodexModelProvider | None:
-        """Describe the gateway Codex should talk to, if the model declares one.
-
-        Models without ``agent_specific.codex.endpoint``, or whose credential
-        provider declares no matching endpoint, keep Codex pointed at OpenAI
-        and get ``None`` here.
-        """
+        """Configure explicit API-key auth for OpenAI and model gateways."""
         endpoint = model.get_agent_endpoint(
             "codex", provider_override=credential.provider
         )
         if endpoint is None:
+            if (
+                credential.provider == "openai"
+                and credential.credential_type == CredentialType.ENV_VAR
+            ):
+                # Built-in provider IDs are reserved. Use a custom provider
+                # to explicitly bind the exported API key to authentication.
+                return CodexModelProvider(
+                    provider_id="scb_openai",
+                    base_url="https://api.openai.com/v1",
+                    env_key=credential.destination_key,
+                )
             return None
         if endpoint.api_format != "openai":
             raise ValueError(

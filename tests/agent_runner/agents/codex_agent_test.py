@@ -904,10 +904,10 @@ class TestCodexModelProviderRouting:
             agent_specific={"codex": {"endpoint": "openai", "thinking": "high"}},
         )
 
-    def test_from_config_without_endpoint_leaves_provider_unset(
+    def test_from_config_without_endpoint_configures_openai_api_key(
         self, mock_cost_limits, mock_model_def, mock_credential
     ):
-        """A model with no codex endpoint keeps Codex pointed at OpenAI."""
+        """Direct OpenAI API keys get explicit provider authentication."""
         config = CodexConfig(
             type="codex", version="1.0.0", cost_limits=mock_cost_limits
         )
@@ -921,10 +921,23 @@ class TestCodexModelProviderRouting:
             image="test-image",
         )
 
-        assert agent.model_provider is None
-        assert "model_provider" not in " ".join(agent._build_command("go"))
+        assert agent.model_provider == CodexModelProvider(
+            provider_id="scb_openai",
+            base_url="https://api.openai.com/v1",
+            env_key="OPENAI_API_KEY",
+        )
+        for resume in (False, True):
+            command, env = agent._prepare_runtime_execution(
+                "go", resume=resume
+            )
+            assert env["OPENAI_API_KEY"] == "test-api-key"
+            assert 'model_provider="scb_openai"' in command
+            assert (
+                'model_providers.scb_openai.env_key="OPENAI_API_KEY"'
+                in command
+            )
 
-    def test_from_config_without_provider_endpoint_leaves_provider_unset(
+    def test_from_config_without_provider_endpoint_uses_openai_api_key(
         self, mock_cost_limits, gateway_model, mock_credential
     ):
         """Declaring an endpoint is inert when the provider declares none."""
@@ -941,7 +954,25 @@ class TestCodexModelProviderRouting:
             image="test-image",
         )
 
-        assert agent.model_provider is None
+        assert agent.model_provider is not None
+        assert agent.model_provider.env_key == "OPENAI_API_KEY"
+
+    def test_file_credentials_keep_builtin_provider(
+        self, mock_model_def, mock_credential
+    ):
+        """File-based Codex login must keep its normal auth path."""
+        from slop_code.agent_runner.credentials import CredentialType
+
+        credential = mock_credential.model_copy(
+            update={
+                "provider": "codex_auth",
+                "credential_type": CredentialType.FILE,
+            }
+        )
+        assert (
+            CodexAgent._build_model_provider(mock_model_def, credential)
+            is None
+        )
 
     def test_from_config_builds_provider_from_credential_provider(
         self, mock_cost_limits, gateway_model, portkey_credential
