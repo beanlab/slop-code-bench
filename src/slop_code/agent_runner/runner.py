@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import tempfile
 import threading
 import time
 import traceback
@@ -22,6 +23,9 @@ from slop_code.agent_runner.reporting import AgentCheckpointSummary
 from slop_code.agent_runner.reporting import MetricsTracker
 from slop_code.agent_runner.resume import ResumeInfo
 from slop_code.agent_runner.state import AgentStateEnum
+from slop_code.agent_runner.validate import CALLS_FILENAME
+from slop_code.agent_runner.validate import VALIDATE_DESCRIPTION
+from slop_code.agent_runner.validate import ValidateServer
 from slop_code.evaluation import CheckpointConfig
 from slop_code.evaluation import CorrectnessResults
 from slop_code.evaluation import PassPolicy
@@ -31,6 +35,7 @@ from slop_code.execution import EnvironmentSpec
 from slop_code.execution import Session
 from slop_code.execution import SnapshotDiff
 from slop_code.execution import resolve_static_assets
+from slop_code.execution.docker_runtime import DockerEnvironmentSpec
 from slop_code.logging import get_logger
 from slop_code.metrics import SnapshotQualityReport
 from slop_code.metrics import measure_snapshot_quality
@@ -178,6 +183,7 @@ def get_task_for_checkpoint(
     agent_type: str | None = None,
     agent_version: str | None = None,
     model_name: str | None = None,
+    validate_enabled: bool = False,
 ) -> str:
     """Generate the task prompt for a specific checkpoint.
 
@@ -194,6 +200,7 @@ def get_task_for_checkpoint(
         agent_type: Agent type identifier for prompt templates
         agent_version: Agent version for prompt templates
         model_name: Model name for prompt templates
+        validate_enabled: Whether to tell the agent about the validate command
 
     Returns:
         Rendered prompt string for the agent
@@ -216,6 +223,8 @@ def get_task_for_checkpoint(
         entry_file=environment.format_entry_file(entry_file),
         entry_command=environment.get_command(entry_file, is_agent_run=True),
     )
+    if validate_enabled:
+        prompt += VALIDATE_DESCRIPTION
     with (output_path / common.PROMPT_FILENAME).open("w") as f:
         f.write(prompt)
     return prompt
@@ -414,6 +423,7 @@ def run_checkpoint(
     agent_type: str | None = None,
     agent_version: str | None = None,
     model_name: str | None = None,
+    validate_enabled: bool = False,
 ) -> tuple[Path, CheckpointInferenceResult | None, SnapshotDiff]:
     task = get_task_for_checkpoint(
         checkpoint_name=checkpoint.name,
@@ -426,6 +436,7 @@ def run_checkpoint(
         agent_type=agent_type,
         agent_version=agent_version,
         model_name=model_name,
+        validate_enabled=validate_enabled,
     )
     snapshot_dir, result, diff = _run_inference(
         checkpoint_name=checkpoint.name,
@@ -461,6 +472,7 @@ class AgentRunner:
 
         # State to be populated during execution
         self._session: Session | None = None
+        self._validate_server: ValidateServer | None = None
         self.metrics_tracker: MetricsTracker = MetricsTracker(
             current_checkpoint="INIT",
             state=AgentStateEnum.INITIALIZED,
@@ -562,6 +574,9 @@ class AgentRunner:
         else:
             self._session.materialize_assets()
 
+        if self.run_spec.validate_enabled:
+            self._setup_validate_server()
+
         # Start progress monitoring
         self.progress_thread = threading.Thread(
             target=agent_progress_watcher,
@@ -574,6 +589,45 @@ class AgentRunner:
             daemon=True,
         )
         self.progress_thread.start()
+
+    def _setup_validate_server(self) -> None:
+        if not isinstance(self.run_spec.environment, DockerEnvironmentSpec):
+            raise AgentRunnerError("validate requires a Docker environment")
+        environment = self.run_spec.environment
+        self._validate_server = ValidateServer(
+            ipc_dir=Path(tempfile.mkdtemp(prefix="scb-ipc-")),
+            workspace_dir=self.session.workspace.working_dir,
+            ignore_globs=environment.get_ignore_globs(
+                self.session.static_assets
+            ),
+            keep_globs=environment.snapshot.keep_globs,
+        )
+        self.session.default_mounts.update(self._validate_server.mounts)
+
+    def _start_validate_server(
+        self, checkpoint: CheckpointConfig, checkpoint_save_dir: Path
+    ) -> None:
+        if self._validate_server is None:
+            return
+        problem = self.run_spec.problem
+        environment = self.run_spec.environment
+
+        def evaluate(submission: Path) -> CorrectnessResults:
+            return evaluate_checkpoint(
+                submission_path=submission,
+                problem=problem,
+                checkpoint=checkpoint,
+                env_spec=environment,
+            )
+
+        self._validate_server.start(
+            evaluate=evaluate,
+            log_path=checkpoint_save_dir / CALLS_FILENAME,
+            usage=lambda: {
+                "cost": self.agent.usage.cost,
+                "steps": self.agent.usage.steps,
+            },
+        )
 
     def _run_resume_commands(self) -> None:
         """Run resume commands after restoring snapshot.
@@ -668,6 +722,9 @@ class AgentRunner:
         # Cleanup agent
         self.agent.cleanup()
 
+        if self._validate_server is not None:
+            self._validate_server.cleanup()
+
         # Close session
         if self._session is not None:
             self._session.__exit__(None, None, None)
@@ -725,21 +782,27 @@ class AgentRunner:
         try:
             self._setup_for_checkpoint(checkpoint)
             self.metrics_tracker.state = AgentStateEnum.RUNNING
-            snapshot_dir, result, diff = run_checkpoint(
-                agent=self.agent,
-                session=self.session,
-                save_dir=checkpoint_save_dir,
-                checkpoint=checkpoint,
-                problem=self.run_spec.problem,
-                environment=self.run_spec.environment,
-                template=self.run_spec.template,
-                replay_path=self.replay_path,
-                is_first_checkpoint=is_first_checkpoint,
-                compress_artifacts=compress,
-                agent_type=self.run_spec.agent_type,
-                agent_version=self.run_spec.agent_version,
-                model_name=self.run_spec.model_name,
-            )
+            self._start_validate_server(checkpoint, checkpoint_save_dir)
+            try:
+                snapshot_dir, result, diff = run_checkpoint(
+                    agent=self.agent,
+                    session=self.session,
+                    save_dir=checkpoint_save_dir,
+                    checkpoint=checkpoint,
+                    problem=self.run_spec.problem,
+                    environment=self.run_spec.environment,
+                    template=self.run_spec.template,
+                    replay_path=self.replay_path,
+                    is_first_checkpoint=is_first_checkpoint,
+                    compress_artifacts=compress,
+                    agent_type=self.run_spec.agent_type,
+                    agent_version=self.run_spec.agent_version,
+                    model_name=self.run_spec.model_name,
+                    validate_enabled=self.run_spec.validate_enabled,
+                )
+            finally:
+                if self._validate_server is not None:
+                    self._validate_server.stop()
             if result is not None:
                 reporting.save_agent_checkpoint_info(
                     checkpoint_save_dir,

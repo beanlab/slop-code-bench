@@ -86,9 +86,11 @@ class RunConfig(BaseModel):
         save_template: Output path template with OmegaConf interpolation support
         one_shot: Whether to run the problem as a single checkpoint with a
             combined specification.
+        validate_enabled: Whether the agent can run the checkpoint's tests
+            mid-solve. Set with the `validate` key.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     # Can be: bare name, path string, or inline dict
     agent: str | dict[str, Any] = "claude_code-2.0.51"
@@ -111,6 +113,8 @@ class RunConfig(BaseModel):
     problems: list[str] = Field(default_factory=list)
 
     one_shot: OneShotConfig = Field(default_factory=OneShotConfig)
+
+    validate_enabled: bool = Field(default=False, alias="validate")
 
     # Output path configuration with interpolation support
     # Available variables: ${model.name}, ${model.provider}, ${agent.type},
@@ -155,6 +159,8 @@ class ResolvedRunConfig(BaseModel):
         save_template: Resolved output path template (interpolations applied)
         output_path: Full output path (save_dir/save_template)
         one_shot: One-shot execution configuration.
+        validate_enabled: Whether the agent can run the checkpoint's tests
+            mid-solve.
     """
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
@@ -174,3 +180,4 @@ class ResolvedRunConfig(BaseModel):
     save_template: str
     output_path: str
     one_shot: OneShotConfig = Field(default_factory=OneShotConfig)
+    validate_enabled: bool = False

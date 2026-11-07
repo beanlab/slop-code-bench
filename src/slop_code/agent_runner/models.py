@@ -182,6 +182,13 @@ class AgentRunSpec(BaseModel):
             "the next solve); agent errors and rate limits still stop the run."
         ),
     ] = False
+    validate_enabled: Annotated[
+        bool,
+        Field(
+            description="Let the agent run the checkpoint's tests mid-solve "
+            "and see which tests failed."
+        ),
+    ] = False
     verbose: Annotated[
         bool, Field(description="Whether to print verbose output")
     ] = False
