@@ -324,6 +324,7 @@ def _get_default_config() -> dict[str, Any]:
             "prefix": "",
             "include_first_prefix": False,
         },
+        "validate": False,
         "save_dir": "outputs",
         "save_template": "${model.name}/${agent.type}-${agent.version}_${prompt}_${thinking}_${now:%Y%m%dT%H%M}",
     }
@@ -520,6 +521,14 @@ def load_run_config(
     )
     save_template = _resolve_save_template(save_template_raw, context)
 
+    # Validate runs see hidden test names, so their outputs stay separate.
+
+    validate = cfg_dict.get("validate", False)
+    if not isinstance(validate, bool):
+        raise ValueError(f"Invalid validate value: {validate!r}")
+    if validate:
+        save_template = f"{save_template}_validate"
+
     # Combine root and template, handling empty root case
     output_path = f"{save_dir}/{save_template}" if save_dir else save_template
 
@@ -535,6 +544,7 @@ def load_run_config(
         output_path=output_path,
         problems=len(problems),
         one_shot=one_shot.enabled,
+        validate_enabled=validate,
     )
 
     return ResolvedRunConfig(
@@ -553,6 +563,7 @@ def load_run_config(
         save_template=save_template,
         output_path=output_path,
         one_shot=one_shot,
+        validate_enabled=validate,
     )
 
 

@@ -76,6 +76,10 @@ class Session:
         self._exec_runtimes: list[ExecRuntime] = []
         self.is_agent_infer = is_agent_infer
 
+        # Mounts added to every runtime from `spawn`.
+
+        self.default_mounts: dict[str, dict[str, str] | str] = {}
+
     def spawn(
         self,
         ports: dict[int, int] | None = None,
@@ -111,7 +115,7 @@ class Session:
             working_dir=self.workspace.working_dir,
             static_assets=self.static_assets,
             ports=ports or {},
-            mounts=mounts or {},
+            mounts={**self.default_mounts, **(mounts or {})},
             env_vars=env_vars or {},
             setup_command=setup_command,
             is_evaluation=not self.is_agent_infer,

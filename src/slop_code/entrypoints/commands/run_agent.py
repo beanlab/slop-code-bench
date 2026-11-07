@@ -111,6 +111,7 @@ def _validate_resume_config(
         "agent.type",
         "thinking",
         "prompt_path",
+        "validate_enabled",
     ]
 
     for field in config_fields:
@@ -930,6 +931,7 @@ def _create_task_config(
         image=image_name,
         resume=resume,
         one_shot=run_cfg.one_shot,
+        validate_enabled=run_cfg.validate_enabled,
     )
 
 

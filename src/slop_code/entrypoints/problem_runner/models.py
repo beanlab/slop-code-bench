@@ -85,6 +85,7 @@ class RunTaskConfig:
     live_progress: bool = False
     disable_evaluation: bool = False
     concurrent_evaluation: bool = False
+    validate_enabled: bool = False
     resume: bool = False
     dry_run: bool = False
     one_shot: OneShotConfig = field(default_factory=OneShotConfig)
