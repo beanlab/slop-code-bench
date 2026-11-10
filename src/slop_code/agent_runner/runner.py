@@ -384,6 +384,7 @@ def _run_inference(
             completed=completed,
             elapsed=(completed - started).total_seconds(),
             usage=agent.usage.model_copy(deep=True),
+            usage_by_agent=dict(agent.usage_by_agent),
             had_error=True,
             error_message=error,
         )

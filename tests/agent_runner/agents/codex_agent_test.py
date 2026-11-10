@@ -87,6 +87,60 @@ class FakeSession:
         return self.runtime
 
 
+ROOT_ID = "01a1c698-110f-7213-90a6-0d797a4fbea4"
+CHILD_ID = "01a1c698-510f-7182-b085-d51ee027ab2e"
+
+
+def _token_count(input_tokens: int, cached: int, output: int) -> dict:
+    return {
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": input_tokens,
+                    "cached_input_tokens": cached,
+                    "output_tokens": output,
+                    "reasoning_output_tokens": 0,
+                },
+            },
+        },
+    }
+
+
+ROOT_META = {
+    "type": "session_meta",
+    "payload": {"id": ROOT_ID, "source": "exec", "thread_source": "user"},
+}
+
+# Trimmed from a real codex 0.166.0 run: the child's own meta comes first,
+# then the forked parent history, including the parent's meta.
+CHILD_META = {
+    "type": "session_meta",
+    "payload": {
+        "id": CHILD_ID,
+        "parent_thread_id": ROOT_ID,
+        "thread_source": "subagent",
+        "agent_path": "/root/schema_check",
+        "agent_nickname": "Laplace",
+        "subagent_history_start_ordinal": 20,
+    },
+}
+
+
+def _write_rollouts(trace_dir: Path) -> None:
+    sessions = trace_dir / "sessions" / "2026" / "11" / "10"
+    sessions.mkdir(parents=True)
+    root_lines = [ROOT_META, _token_count(1000, 800, 50)]
+    child_lines = [CHILD_META, ROOT_META, _token_count(400, 300, 20)]
+    (sessions / f"rollout-2026-11-10T17-53-38-{ROOT_ID}.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in root_lines)
+    )
+    (sessions / f"rollout-2026-11-10T17-53-53-{CHILD_ID}.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in child_lines)
+    )
+
+
 @pytest.fixture
 def mock_pricing():
     """Standard pricing for tests."""
@@ -819,6 +873,120 @@ class TestCodexAgent:
         assert saved_new_trace.exists()
         assert saved_new_trace.read_text() == second_trace.read_text()
 
+    def test_run_sums_usage_across_subagent_rollouts(
+        self, tmp_path, mock_cost_limits, mock_pricing
+    ):
+        """Total usage is root plus each subagent, also reported per agent."""
+        runtime = FakeRuntime()
+        runtime.events = [
+            RuntimeEvent(
+                kind="finished",
+                result=RuntimeResult(
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    setup_stdout="",
+                    setup_stderr="",
+                    elapsed=0.1,
+                    timed_out=False,
+                ),
+            ),
+        ]
+        session = FakeSession(
+            runtime=runtime,
+            working_dir=tmp_path,
+            spec=DockerEnvironmentSpec(
+                name="test", docker=DockerConfig(image="test-image")
+            ),
+        )
+        agent = CodexAgent(
+            problem_name="test-problem",
+            verbose=False,
+            image="test-image",
+            cost_limits=mock_cost_limits,
+            pricing=mock_pricing,
+            credential=None,
+            binary="codex",
+            model=None,
+            timeout=None,
+            thinking=None,
+            max_thinking_tokens=None,
+            extra_args=[],
+            env={},
+            model_provider=None,
+        )
+        agent.setup(cast("Session", session))
+        assert agent._trace_dir is not None
+        _write_rollouts(agent._trace_dir)
+
+        agent.run("do something")
+
+        assert set(agent.usage_by_agent) == {"/root", "/root/schema_check"}
+        root = agent.usage_by_agent["/root"]
+        child = agent.usage_by_agent["/root/schema_check"]
+        assert root.tokens.input == 1000
+        assert child.tokens.input == 400
+        assert agent.usage.net_tokens.input == 1400
+        assert agent.usage.net_tokens.output == 70
+        assert agent.usage.cost == pytest.approx(root.cost + child.cost)
+        assert child.cost == pytest.approx(mock_pricing.get_cost(child.tokens))
+
+    def test_save_artifacts_splits_subagent_rollouts(
+        self, tmp_path, mock_cost_limits, mock_pricing
+    ):
+        """Each agent's rollout gets its own folder, indexed by agents.json."""
+        agent = CodexAgent(
+            problem_name="test-problem",
+            verbose=False,
+            image="test-image",
+            cost_limits=mock_cost_limits,
+            pricing=mock_pricing,
+            credential=None,
+            binary="codex",
+            model=None,
+            timeout=None,
+            thinking=None,
+            max_thinking_tokens=None,
+            extra_args=[],
+            env={},
+            model_provider=None,
+        )
+        trace_dir = tmp_path / "codex_traces"
+        _write_rollouts(trace_dir)
+        (trace_dir / "responses.jsonl").write_text('{"id":"resp_1"}\n')
+        agent._trace_dir = trace_dir
+
+        output_dir = tmp_path / "artifacts"
+        agent._save_codex_traces(output_dir)
+
+        child_dir = f"schema_check-{CHILD_ID[-8:]}"
+        root_rollout = output_dir / "agents" / "root" / "rollout.jsonl"
+        child_rollout = output_dir / "agents" / child_dir / "rollout.jsonl"
+        assert json.loads(root_rollout.read_text().splitlines()[0]) == ROOT_META
+
+        # The child keeps its forked parent prefix.
+        child_lines = child_rollout.read_text().splitlines()
+        assert [json.loads(line) for line in child_lines[:2]] == [
+            CHILD_META,
+            ROOT_META,
+        ]
+        assert (output_dir / "responses.jsonl").exists()
+
+        manifest = json.loads((output_dir / "agents.json").read_text())
+        assert [entry["dir"] for entry in manifest] == [
+            "agents/root",
+            f"agents/{child_dir}",
+        ]
+        child = manifest[1]
+        assert child["id"] == CHILD_ID
+        assert child["parent_id"] == ROOT_ID
+        assert child["agent_path"] == "/root/schema_check"
+        assert child["nickname"] == "Laplace"
+        assert child["depth"] == 1
+        assert child["history_start_ordinal"] == 20
+        assert child["usage"]["tokens"]["input"] == 400
+        assert manifest[0]["parent_id"] is None
+
     def test_build_command_with_thinking_disabled(
         self, mock_cost_limits, mock_pricing
     ):
@@ -1062,3 +1230,30 @@ class TestCodexModelProviderRouting:
 
         assert env_overrides["PORTKEY_API_KEY"] == "test-portkey-key"
         assert 'model_providers.portkey.env_key="PORTKEY_API_KEY"' in command
+        assert "CODEX_API_KEY" not in env_overrides
+
+    def test_prepare_runtime_execution_exports_codex_api_key(
+        self, mock_cost_limits, mock_pricing, mock_credential
+    ):
+        """Direct OpenAI runs export the key under the name Codex reads."""
+        agent = CodexAgent(
+            problem_name="test-problem",
+            verbose=False,
+            image="test-image",
+            cost_limits=mock_cost_limits,
+            pricing=mock_pricing,
+            credential=mock_credential,
+            binary="codex",
+            model="gpt-6-luna",
+            timeout=None,
+            thinking=None,
+            max_thinking_tokens=None,
+            extra_args=[],
+            env={},
+            model_provider=None,
+        )
+
+        _, env_overrides = agent._prepare_runtime_execution("do it")
+
+        assert env_overrides["CODEX_API_KEY"] == "test-api-key"
+        assert env_overrides["OPENAI_API_KEY"] == "test-api-key"

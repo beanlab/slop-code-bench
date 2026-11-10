@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 import shlex
 import shutil
 import tempfile
 import typing as tp
+from dataclasses import dataclass
 from pathlib import Path
 
 from jinja2 import Template
@@ -26,6 +28,7 @@ from slop_code.agent_runner.credentials import CredentialType
 from slop_code.agent_runner.credentials import ProviderCredential
 from slop_code.agent_runner.models import AgentCostLimits
 from slop_code.agent_runner.models import AgentError
+from slop_code.agent_runner.models import AgentThreadUsage
 from slop_code.agent_runner.registry import register_agent
 from slop_code.common.llms import APIPricing
 from slop_code.common.llms import ModelDefinition
@@ -38,6 +41,45 @@ from slop_code.execution import StreamingRuntime
 from slop_code.logging import get_logger
 
 log = get_logger(__name__)
+
+ROOT_AGENT_PATH = "/root"
+_UNSAFE_DIR_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+@dataclass(frozen=True)
+class CodexThread:
+    """One Codex agent thread, read from its rollout file.
+
+    Codex writes one rollout per thread. A subagent's rollout opens with its
+    own ``session_meta`` line, then replays the parent history it forked;
+    its own turns start at ``history_start_ordinal``.
+    """
+
+    source: Path
+    is_rollout: bool
+    id: str
+    agent_path: str
+    nickname: str | None
+    parent_id: str | None
+    history_start_ordinal: int | None
+    usage: AgentThreadUsage | None
+
+    @property
+    def depth(self) -> int:
+        return self.agent_path.count("/") - 1
+
+    @property
+    def dir_name(self) -> str:
+        """Folder name under ``agents/``.
+
+        Subagents get ``<task_name>-<last 8 chars of thread id>``. Thread ids
+        are time-ordered, so their leading characters repeat across agents.
+        """
+        if self.parent_id is None:
+            return "root"
+        task_name = self.agent_path.rsplit("/", 1)[-1]
+        task_name = _UNSAFE_DIR_CHARS.sub("_", task_name) or "agent"
+        return f"{task_name}-{self.id[-8:]}"
 
 
 class CodexModelProvider(BaseModel):
@@ -528,12 +570,18 @@ class CodexAgent(Agent):
 
         stdout = runtime_result.stdout if runtime_result else ""
         stderr = runtime_result.stderr if runtime_result else ""
-        trace_cost, trace_tokens = self._read_latest_trace_usage()
-        if trace_tokens is not None:
-            reported_total_tokens = trace_tokens
-            if trace_cost is not None:
-                has_reported_cost = True
-                reported_cost_micros = int(round(float(trace_cost) * 1_000_000))
+
+        # Each thread's rollout holds only its own usage, so the total is the sum.
+        self.usage_by_agent = self._usage_by_agent(self._read_threads())
+        if self.usage_by_agent:
+            thread_usages = self.usage_by_agent.values()
+            reported_total_tokens = sum(
+                (usage.tokens for usage in thread_usages), TokenUsage()
+            )
+            has_reported_cost = True
+            reported_cost_micros = int(
+                round(sum(usage.cost for usage in thread_usages) * 1_000_000)
+            )
         final_tokens = reported_total_tokens or total_tokens
 
         return AgentCommandResult(
@@ -553,31 +601,66 @@ class CodexAgent(Agent):
             stderr=stderr,
         )
 
-    def _read_latest_trace_usage(
-        self,
-    ) -> tuple[float | None, TokenUsage | None]:
-        if self._trace_dir is None:
-            return None, None
+    def _read_thread(self, path: Path) -> CodexThread:
+        """Read a trace file's first ``session_meta`` and last token count.
 
-        latest_cost: float | None = None
-        latest_tokens: TokenUsage | None = None
-        for path in self._new_trace_files():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                cost, tokens, payload = self.parse_line(
-                    line, pricing=self.pricing
-                )
-                if tokens is None or payload is None:
-                    continue
-                if payload.get("type") != "event_msg":
-                    continue
-                event_payload = payload.get("payload")
-                if not isinstance(event_payload, dict):
-                    continue
-                if event_payload.get("type") != "token_count":
-                    continue
-                latest_tokens = tokens
-                latest_cost = cost
-        return latest_cost, latest_tokens
+        A file without ``session_meta`` is treated as the root thread.
+        """
+        meta: dict[str, tp.Any] | None = None
+        cost: float | None = None
+        tokens: TokenUsage | None = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line_cost, line_tokens, payload = self.parse_line(
+                line, pricing=self.pricing
+            )
+            if payload is None:
+                continue
+
+            # Forked children also carry the parent's session_meta; the first is their own.
+            if payload.get("type") == "session_meta" and meta is None:
+                inner = payload.get("payload")
+                meta = inner if isinstance(inner, dict) else {}
+            elif line_tokens is not None and payload.get("type") == "event_msg":
+                cost, tokens = line_cost, line_tokens
+
+        usage = None
+        if tokens is not None:
+            if cost is None:
+                cost = self.pricing.get_cost(tokens) if self.pricing else 0.0
+            usage = AgentThreadUsage(cost=cost, tokens=tokens)
+
+        meta_fields = meta or {}
+        return CodexThread(
+            source=path,
+            is_rollout=meta is not None,
+            id=str(meta_fields.get("id") or path.stem),
+            agent_path=str(meta_fields.get("agent_path") or ROOT_AGENT_PATH),
+            nickname=meta_fields.get("agent_nickname"),
+            parent_id=meta_fields.get("parent_thread_id"),
+            history_start_ordinal=meta_fields.get(
+                "subagent_history_start_ordinal"
+            ),
+            usage=usage,
+        )
+
+    def _read_threads(self) -> list[CodexThread]:
+        threads = [self._read_thread(path) for path in self._new_trace_files()]
+        return sorted(threads, key=lambda t: (t.depth, t.agent_path, t.id))
+
+    @staticmethod
+    def _usage_by_agent(
+        threads: list[CodexThread],
+    ) -> dict[str, AgentThreadUsage]:
+        """Key thread usage by agent path; a repeated path gets its id suffix."""
+        usage_by_agent: dict[str, AgentThreadUsage] = {}
+        for thread in threads:
+            if thread.usage is None:
+                continue
+            key = thread.agent_path
+            if key in usage_by_agent:
+                key = f"{key}#{thread.id[-8:]}"
+            usage_by_agent[key] = thread.usage
+        return usage_by_agent
 
     def _new_trace_files(self) -> list[Path]:
         if self._trace_dir is None:
@@ -634,6 +717,11 @@ class CodexAgent(Agent):
             env_overrides[self.credential.destination_key] = (
                 self.credential.value
             )
+
+            # Codex's built-in OpenAI provider reads CODEX_API_KEY, not OPENAI_API_KEY.
+            if self.model_provider is None:
+                env_overrides.setdefault("CODEX_API_KEY", self.credential.value)
+
         command = self._build_command(task, resume=resume)
 
         return command, env_overrides
@@ -720,24 +808,70 @@ class CodexAgent(Agent):
             self.log.debug("agent.codex.traces.skipped", reason="no_trace_dir")
             return
         jsonl_files = find_jsonl_files(self._trace_dir)
-        new_jsonl_files = [
-            path
-            for path in jsonl_files
-            if path.relative_to(self._trace_dir) not in self._saved_trace_paths
-        ]
         self.log.debug(
             "agent.codex.traces.found",
             trace_dir=str(self._trace_dir),
             files=len(jsonl_files),
         )
-        copied = copy_jsonl_files(new_jsonl_files, output_dir)
-        for path in new_jsonl_files:
-            self._saved_trace_paths.add(path.relative_to(self._trace_dir))
+        threads = self._read_threads()
+        rollouts = [thread for thread in threads if thread.is_rollout]
+        others = [thread.source for thread in threads if not thread.is_rollout]
+
+        copied = copy_jsonl_files(others, output_dir)
+        manifest = self._save_rollouts(rollouts, output_dir)
+        for thread in threads:
+            self._saved_trace_paths.add(
+                thread.source.relative_to(self._trace_dir)
+            )
         self.log.debug(
             "agent.codex.traces.saved",
             output_dir=str(output_dir),
-            saved=len(copied),
+            saved=len(copied) + len(manifest),
+            agents=len(manifest),
         )
+
+    @staticmethod
+    def _save_rollouts(
+        rollouts: list[CodexThread], output_dir: Path
+    ) -> list[dict[str, tp.Any]]:
+        """Copy each rollout to ``agents/<dir>/rollout.jsonl`` and index them.
+
+        ``agents.json`` lists every agent with its parent link and usage.
+        """
+        manifest: list[dict[str, tp.Any]] = []
+        used_dirs: set[str] = set()
+        for thread in rollouts:
+            dir_name = thread.dir_name
+            if dir_name in used_dirs:
+                dir_name = f"{dir_name}-{thread.id[-8:]}"
+            used_dirs.add(dir_name)
+
+            agent_dir = output_dir / "agents" / dir_name
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(thread.source, agent_dir / "rollout.jsonl")
+            manifest.append(
+                {
+                    "id": thread.id,
+                    "dir": f"agents/{dir_name}",
+                    "agent_path": thread.agent_path,
+                    "nickname": thread.nickname,
+                    "parent_id": thread.parent_id,
+                    "depth": thread.depth,
+                    "history_start_ordinal": thread.history_start_ordinal,
+                    "source_file": thread.source.name,
+                    "usage": (
+                        thread.usage.model_dump(mode="json")
+                        if thread.usage is not None
+                        else None
+                    ),
+                }
+            )
+        if manifest:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "agents.json").write_text(
+                json.dumps(manifest, indent=2)
+            )
+        return manifest
 
     def cleanup(self) -> None:
         """Clean up resources held by the Codex agent."""

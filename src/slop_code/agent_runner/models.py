@@ -82,6 +82,13 @@ class UsageTracker(BaseModel):
         self.current_tokens = tokens
 
 
+class AgentThreadUsage(BaseModel):
+    """Cost and tokens for one agent thread, such as a spawned subagent."""
+
+    cost: float = 0
+    tokens: TokenUsage = Field(default_factory=TokenUsage)
+
+
 class AgentCostLimits(BaseModel):
     """Cost and step limits for agent execution.
 
