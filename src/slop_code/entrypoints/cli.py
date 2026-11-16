@@ -4,15 +4,17 @@ import typer
 from dotenv import load_dotenv
 from structlog import get_logger
 
-from slop_code import common
-from slop_code import problem_catalog
-from slop_code.entrypoints import commands
-from slop_code.entrypoints import utils
-from slop_code.logging import setup_logging
+# Command imports initialize tempfile, which caches TMPDIR on first use.
+# Load environment settings before that happens, including provider credentials.
+load_dotenv()
+
+from slop_code import common  # noqa: E402
+from slop_code import problem_catalog  # noqa: E402
+from slop_code.entrypoints import commands  # noqa: E402
+from slop_code.entrypoints import utils  # noqa: E402
+from slop_code.logging import setup_logging  # noqa: E402
 
 logger = get_logger(__name__)
-
-load_dotenv()
 
 app = typer.Typer(
     help="CLI for running agents, evaluations, and the dashboard.",

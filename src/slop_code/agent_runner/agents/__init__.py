@@ -19,6 +19,8 @@ from slop_code.agent_runner.agents.kimi_cli import KimiCliAgent
 from slop_code.agent_runner.agents.kimi_cli import KimiCliConfig
 from slop_code.agent_runner.agents.miniswe import MiniSWEAgent
 from slop_code.agent_runner.agents.miniswe import MiniSWEAgentConfig
+from slop_code.agent_runner.agents.myteam import MyTeamAgent
+from slop_code.agent_runner.agents.myteam import MyTeamConfig
 from slop_code.agent_runner.agents.opencode import OpenCodeAgentConfig
 from slop_code.agent_runner.agents.openhands import OpenHandsAgent
 from slop_code.agent_runner.agents.openhands import OpenHandsConfig
@@ -51,6 +53,8 @@ __all__ = [
     "KimiCliConfig",
     "MiniSWEAgent",
     "MiniSWEAgentConfig",
+    "MyTeamAgent",
+    "MyTeamConfig",
     "OpenCodeAgentConfig",
     "OpenHandsAgent",
     "OpenHandsConfig",

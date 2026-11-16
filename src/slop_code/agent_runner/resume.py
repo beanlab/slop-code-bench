@@ -451,6 +451,25 @@ def detect_resume_point(
 
     summary = run_info.get("summary", {})
     checkpoint_states = summary.get("checkpoints", {})
+    if (
+        summary.get("error_type") == "KeyboardInterrupt"
+        and checkpoint_names
+        and all(
+            checkpoint_states.get(name) == CheckpointState.SKIPPED
+            for name in checkpoint_names
+        )
+    ):
+        # Interruption can prevent the runner from assigning its completed
+        # results, leaving an all-skipped summary despite valid artifacts.
+        return _detect_resume_from_artifacts(
+            output_path,
+            checkpoint_names,
+            problem_config=problem_config,
+            prompt_template=prompt_template,
+            environment=environment,
+            entry_file=entry_file,
+            checkpoints=checkpoints,
+        )
     # Find completed checkpoints and first incomplete one
     completed: list[str] = []
     statuses: list[CheckpointStatus] = []
