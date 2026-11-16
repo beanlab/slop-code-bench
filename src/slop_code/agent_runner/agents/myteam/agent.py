@@ -26,6 +26,9 @@ from slop_code.common.llms import APIPricing
 from slop_code.common.llms import ModelDefinition
 from slop_code.common.llms import ThinkingPreset
 from slop_code.common.llms import TokenUsage
+from slop_code.common.workflow import WorkflowProvenance
+from slop_code.common.workflow import copy_workflow
+from slop_code.common.workflow import workflow_provenance
 from slop_code.execution import DockerEnvironmentSpec
 from slop_code.execution import LocalEnvironmentSpec
 from slop_code.execution import Session
@@ -51,6 +54,7 @@ class MyTeamConfig(AgentConfigBase):
     workflow_dir: Path = Path("configs/workflows/myteam/example")
     workflow_entrypoint: str = "solve.py"
     workflow_args: list[str] = Field(default_factory=list)
+    workflow_metadata: WorkflowProvenance | None = None
     timeout: int = Field(default=7200, gt=0)
     idle_timeout: int = Field(default=600, ge=0)
     env: dict[str, str] = Field(default_factory=dict)
@@ -183,7 +187,26 @@ class MyTeamAgent(Agent):
         root.chmod(0o755)
         self._bundle_dir = root / "bundle"
         self._bundle_dir.mkdir()
-        shutil.copytree(workflow_root, self._bundle_dir / "workflow")
+        copy_workflow(workflow_root, self._bundle_dir / "workflow")
+        provenance = workflow_provenance(
+            {
+                **self.config.model_dump(mode="json"),
+                "workflow_dir": self._bundle_dir / "workflow",
+            }
+        )
+        if provenance is None:
+            raise AgentSetupError("Missing myteam workflow provenance")
+        if self.config.workflow_metadata is not None:
+            expected = self.config.workflow_metadata
+            if provenance.content_hash != expected.content_hash:
+                raise AgentSetupError("Workflow snapshot content has changed")
+            provenance = expected.model_copy(deep=True)
+        else:
+            provenance.name = workflow_root.name
+            provenance.source_dir = str(workflow_root)
+        (self._bundle_dir / "workflow.json").write_text(
+            provenance.model_dump_json(indent=2), encoding="utf-8"
+        )
         shutil.copy2(
             Path(__file__).with_name("scb_myteam.py"),
             self._bundle_dir / "scb_myteam.py",
@@ -394,6 +417,15 @@ class MyTeamAgent(Agent):
         path.mkdir(parents=True, exist_ok=True)
         if self._artifacts_dir is not None:
             shutil.copytree(self._artifacts_dir, path, dirs_exist_ok=True)
+        if self._bundle_dir is not None:
+            shutil.copytree(
+                self._bundle_dir / "workflow",
+                path / "workflow",
+                dirs_exist_ok=True,
+            )
+            shutil.copy2(
+                self._bundle_dir / "workflow.json", path / "workflow.json"
+            )
 
     def cleanup(self) -> None:
         try:

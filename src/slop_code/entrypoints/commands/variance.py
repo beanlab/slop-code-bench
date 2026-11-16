@@ -18,6 +18,7 @@ from rich.table import Table
 
 from slop_code.common import CHECKPOINT_RESULTS_FILENAME
 from slop_code.common import CONFIG_FILENAME
+from slop_code.common.workflow import run_provenance
 from slop_code.entrypoints.utils import ensure_dir_exists
 from slop_code.metrics import load_checkpoint_data
 
@@ -136,6 +137,7 @@ class RunGroupKey:
     thinking: str
     agent_type: str
     agent_version: str
+    workflow_identity: str = ""
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -144,6 +146,7 @@ class RunGroupKey:
             "thinking": self.thinking,
             "agent_type": self.agent_type,
             "agent_version": self.agent_version,
+            "workflow_identity": self.workflow_identity,
         }
 
 
@@ -225,7 +228,11 @@ def _load_group_key(run_dir: Path) -> RunGroupKey:
         except (OSError, yaml.YAMLError):
             cfg = {}
 
+    provenance = run_provenance(cfg)
     return RunGroupKey(
+        workflow_identity=(
+            provenance["execution_identity"] if provenance["workflow"] else ""
+        ),
         model=_get_nested_str(cfg, "model", "name"),
         prompt_path=_get_nested_str(cfg, "prompt_path"),
         thinking=_get_nested_str(cfg, "thinking"),
@@ -896,10 +903,11 @@ def _iter_problem_records(
             yield record
 
 
-def _group_sort_key(group: RunGroup) -> tuple[str, str, str, str, str]:
+def _group_sort_key(group: RunGroup) -> tuple[str, ...]:
     key = group.key
     return (
         key.model,
+        key.workflow_identity,
         key.prompt_path,
         key.thinking,
         key.agent_type,
@@ -911,8 +919,8 @@ def register(app: typer.Typer, name: str) -> None:
     app.command(
         name,
         help=(
-            "Compute variance across multiple runs, grouped by model/prompt/"
-            "thinking/agent version, writing JSONL variance reports."
+            "Compute variance across multiple runs, grouped by model/"
+            "workflow/prompt/thinking/agent version, writing JSONL reports."
         ),
     )(variance_report)
 

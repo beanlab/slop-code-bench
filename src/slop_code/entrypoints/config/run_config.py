@@ -10,6 +10,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 
+from slop_code.common.workflow import WorkflowProvenance
 from slop_code.evaluation import PassPolicy
 
 ThinkingPresetType = Literal[
@@ -165,6 +166,7 @@ class ResolvedRunConfig(BaseModel):
     environment: dict[str, Any]
     prompt_path: Path
     prompt_content: str
+    workflow: WorkflowProvenance | None = None
     model: ModelConfig
     thinking: ThinkingPresetType | None
     thinking_max_tokens: int | None

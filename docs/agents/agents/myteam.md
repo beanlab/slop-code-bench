@@ -102,6 +102,39 @@ The workflow allows up to three review rounds; if issues remain after the last
 round, the report marks the work as not approved and includes the final
 findings. Each stage counts as a session for usage and cost accounting.
 
+## Workflow provenance and reporting
+
+The benchmark prompt template prepares `load_request()["task"]`; it is not
+necessarily the prompt sent to a model. Workflows can construct multiple
+prompts, use prompt files, or generate instructions from earlier results.
+
+For `slop-code run`, the workflow directory is snapshotted once under
+`<run>/workflows/<sha256>/` before workers start. All workers execute copies of
+that snapshot. `config.yaml` retains the original source directory and records
+`workflow` metadata: name, source directory, entrypoint, arguments, content
+hash, and resolved myteam/backend versions. The hash covers relative file
+names and file bytes, excluding `.git`, `__pycache__`, and `*.pyc` files.
+Include imported helpers and prompt resources inside `workflow_dir` to preserve
+them; external files and dependencies are not captured by this snapshot.
+
+Each checkpoint's agent artifacts also contain `workflow/` and `workflow.json`,
+preserved from the staged bundle rather than reread from the original source.
+These are retained on workflow failure as well as success.
+
+Run summaries identify myteam execution with `workflow`, `execution_kind`, and
+`execution_identity`; their `prompt` is null and `task_template` retains the
+benchmark task-template name. Dashboard grouping and variance reports use
+workflow identity, including content and invocation settings. Default output
+names use the workflow directory name rather than the task-template name;
+`${workflow}` is also available in custom output templates. Ordinary agents
+continue to use prompt-template identity.
+
+Resume validation rejects changes to workflow contents, entrypoint, or
+arguments. Older runs without saved workflow contents are reported with an
+`unrecorded` hash; the benchmark does not pretend today's source files were
+used in those runs. Native session transcripts remain the record of actual
+messages, including dynamically generated prompts.
+
 ## Accounting and artifacts
 
 The helper records session results, including transcripts and raw usage, in

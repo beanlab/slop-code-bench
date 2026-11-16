@@ -20,6 +20,8 @@ from slop_code.common import ENV_CONFIG_NAME
 from slop_code.common import serialize_path_dict
 from slop_code.common.llms import ModelCatalog
 from slop_code.common.llms import ModelDefinition
+from slop_code.common.workflow import copy_workflow
+from slop_code.common.workflow import workflow_provenance
 from slop_code.entrypoints import evaluation as evaluation_entry
 from slop_code.entrypoints import problem_runner
 from slop_code.entrypoints import utils
@@ -128,6 +130,18 @@ def _validate_resume_config(
 
         if saved_val != current_val:
             mismatches.append((field, saved_val, current_val))
+
+    if current_config.get("agent", {}).get("type") == "myteam":
+        current_workflow = workflow_provenance(current_config["agent"])
+        saved_workflow = saved_config.get("workflow")
+        if saved_workflow and current_workflow:
+            for field in ("content_hash", "entrypoint", "args"):
+                saved_val = saved_workflow.get(field)
+                current_val = getattr(current_workflow, field)
+                if saved_val != current_val:
+                    mismatches.append(
+                        (f"workflow.{field}", saved_val, current_val)
+                    )
 
     # Load and validate environment config
     if env_path.exists():
@@ -594,6 +608,33 @@ def _prepare_run_artifacts(
     Returns:
         Docker image name (empty string if not using Docker)
     """
+    # Freeze one bundle before launching workers. Keep the original source
+    # reference in config.yaml; only the runtime agent uses the snapshot.
+    if agent_config.type == "myteam":
+        source = Path(agent_config.workflow_dir).expanduser().resolve()
+        provenance = workflow_provenance(agent_config.model_dump(mode="json"))
+        if provenance is None:
+            raise ValueError("Missing myteam workflow provenance")
+        if (
+            run_cfg.workflow is not None
+            and provenance.content_hash != run_cfg.workflow.content_hash
+        ):
+            raise ValueError(
+                "Workflow changed since run configuration was loaded"
+            )
+        snapshot = run_dir / "workflows" / provenance.content_hash
+        if not snapshot.exists():
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            copy_workflow(source, snapshot)
+        staged = workflow_provenance(
+            {**agent_config.model_dump(mode="json"), "workflow_dir": snapshot}
+        )
+        if staged is None or staged.content_hash != provenance.content_hash:
+            raise ValueError("Workflow changed while preparing run snapshot")
+        run_cfg.workflow = provenance
+        agent_config.workflow_dir = snapshot.resolve()
+        agent_config.workflow_metadata = provenance
+
     # Save environment and config to run directory
     with (run_dir / ENV_CONFIG_NAME).open("w") as f:
         yaml.dump(serialize_path_dict(env_spec.model_dump(mode="json")), f)

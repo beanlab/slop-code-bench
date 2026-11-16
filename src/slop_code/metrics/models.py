@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -651,7 +651,11 @@ class RunSummary(BaseModel):
 
     model: str
     thinking: str
-    prompt: str
+    prompt: str | None
+    task_template: str | None = None
+    workflow: dict[str, Any] | None = None
+    execution_kind: str = "prompt"
+    execution_identity: str | None = None
     agent_type: str
     agent_version: str | None
 

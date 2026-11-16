@@ -123,6 +123,50 @@ class FakeSession:
         return self.runtime
 
 
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_artifacts_preserve_staged_workflow_after_source_changes(
+    config: MyTeamConfig,
+    credential: ProviderCredential,
+    tmp_path: Path,
+    exit_code: int,
+) -> None:
+    (config.workflow_dir / "prompt.txt").write_text("Original instructions")
+    agent = _agent(config, credential)
+    agent.setup(
+        FakeSession(
+            FakeRuntime(exit_code=exit_code),
+            tmp_path,
+            LocalEnvironmentSpec(name="snapshot"),
+        )
+    )
+    try:
+        (config.workflow_dir / "prompt.txt").write_text("Changed instructions")
+        (config.workflow_dir / "solve.py").unlink()
+        if exit_code:
+            with pytest.raises(AgentError):
+                agent.run("Task")
+        else:
+            agent.run("Task")
+        saved = tmp_path / "workflow-artifacts"
+        agent.save_artifacts(saved)
+        assert (saved / "workflow" / "solve.py").is_file()
+        assert (saved / "workflow" / "prompt.txt").read_text() == (
+            "Original instructions"
+        )
+        metadata = json.loads((saved / "workflow.json").read_text())
+        assert metadata["entrypoint"] == "solve.py"
+        assert metadata["source_dir"] == str(config.workflow_dir)
+        assert len(metadata["content_hash"]) == 64
+        agent.reset()
+        second = tmp_path / "second-checkpoint"
+        agent.save_artifacts(second)
+        assert (second / "workflow.json").read_bytes() == (
+            saved / "workflow.json"
+        ).read_bytes()
+    finally:
+        agent.cleanup()
+
+
 def test_yaml_config_loads_through_registry() -> None:
     path = Path("configs/agents/myteam.yaml")
     config = build_agent_config(yaml.safe_load(path.read_text()))

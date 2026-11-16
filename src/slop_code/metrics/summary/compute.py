@@ -6,9 +6,9 @@ to produce a complete RunSummary.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
+from slop_code.common.workflow import run_provenance
 from slop_code.metrics.models import RunSummary
 from slop_code.metrics.summary import aggregators
 from slop_code.metrics.summary.stats import group_by_problem
@@ -34,12 +34,16 @@ def compute_run_summary(
         RunSummary with all computed statistics.
     """
     problems = group_by_problem(checkpoints)
+    provenance = run_provenance(config)
 
     return RunSummary.model_validate(
         {
             "model": config["model"]["name"],
             "thinking": config["thinking"],
-            "prompt": Path(config["prompt_path"]).stem,
+            "prompt": (
+                None if provenance["workflow"] else provenance["task_template"]
+            ),
+            **provenance,
             "agent_type": config["agent"]["type"],
             "agent_version": config["agent"].get("version"),
             "num_problems": len(problems),
