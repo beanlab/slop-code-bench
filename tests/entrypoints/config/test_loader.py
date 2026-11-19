@@ -272,6 +272,22 @@ agent:
 
         assert config.pass_policy == PassPolicy.ALL_CASES
 
+    def test_validate_defaults_off(self):
+        config = load_run_config()
+
+        assert config.validate_enabled is False
+        assert not config.output_path.endswith("_validate")
+
+    def test_validate_override_tags_output_path(self):
+        config = load_run_config(cli_overrides=["validate=true"])
+
+        assert config.validate_enabled is True
+        assert config.output_path.endswith("_validate")
+
+    def test_validate_rejects_non_bool(self):
+        with pytest.raises(ValueError, match="validate"):
+            load_run_config(cli_overrides=["validate=yes"])
+
     def test_output_path_interpolation(self):
         """Test that output_path interpolation works."""
         config = load_run_config(
