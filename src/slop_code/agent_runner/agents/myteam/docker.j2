@@ -1,0 +1,12 @@
+FROM {{ base_image }}
+
+USER root
+RUN python -m venv /opt/scb-myteam && \
+    /opt/scb-myteam/bin/pip install --no-cache-dir myteam=={{ version }}
+
+USER agent
+WORKDIR /workspace
+ENV NPM_CONFIG_PREFIX="$HOME/.npm-global"
+ENV PATH="/opt/scb-myteam/bin:$HOME/.npm-global/bin:$PATH"
+RUN npm install -g @earendil-works/pi-coding-agent@{{ pi_version }} && \
+    chmod -R a+rX "$HOME/.npm-global"

@@ -10,6 +10,7 @@ import yaml
 
 from slop_code.common import CHECKPOINT_RESULTS_FILENAME
 from slop_code.common import CONFIG_FILENAME
+from slop_code.common.workflow import run_provenance
 from slop_code.entrypoints.utils import discover_run_directories
 from slop_code.logging import get_logger
 from slop_code.logging import setup_logging
@@ -213,6 +214,10 @@ def _load_run_metadata(run_dir: Path, base_dir: Path) -> dict[str, Any]:
     if meta["prompt_path"]:
         meta["prompt_name"] = Path(meta["prompt_path"]).stem
     else:
+        meta["prompt_name"] = None
+
+    meta.update(run_provenance(config_data))
+    if meta["workflow"]:
         meta["prompt_name"] = None
 
     meta["thinking_level"] = config_data.get("thinking")

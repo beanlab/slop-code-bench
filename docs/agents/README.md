@@ -41,6 +41,7 @@ Implementing a new agent? See:
 | [OpenCode](agents/opencode.md) | OpenCode CLI agent |
 | [Gemini](agents/gemini.md) | Google's Gemini CLI agent |
 | [OpenHands](agents/openhands.md) | OpenHands framework agent |
+| [Myteam](agents/myteam.md) | Python workflows with managed PI sessions |
 
 ## Core Concepts
 

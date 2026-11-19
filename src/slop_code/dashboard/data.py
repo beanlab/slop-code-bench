@@ -20,6 +20,7 @@ import yaml
 
 from slop_code.common import CHECKPOINT_RESULTS_FILENAME
 from slop_code.common import SUMMARY_FILENAME
+from slop_code.common.workflow import run_provenance
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -183,7 +184,11 @@ def _generate_variant_colors(base_color: str, count: int) -> list[str]:
 
 
 def _format_prompt_display(prompt_template: str) -> str:
-    """Convert prompt template path to display string."""
+    """Convert a prompt template or workflow identity to a display string."""
+    if "@" in prompt_template and ":" in prompt_template:
+        name, identity = prompt_template.rsplit("@", 1)
+        content_hash, invocation_hash = identity.split(":", 1)
+        return f"Workflow: {name} [{content_hash[:12]}:{invocation_hash}]"
     prompt_stem = Path(prompt_template).stem if prompt_template else ""
     if not prompt_stem:
         return "Default"
@@ -476,6 +481,7 @@ def load_config_metadata(run_dir: Path) -> dict[str, Any]:
     if summary:
         num_problems = summary.get("num_problems", 0)
 
+    provenance = run_provenance(config)
     model_display = get_readable_model(model)
     agent_version = str(agent_cfg.get("version", ""))
     if agent_version and agent_version.lower() not in ("none", "", "null"):
@@ -486,7 +492,9 @@ def load_config_metadata(run_dir: Path) -> dict[str, Any]:
         "agent_version": agent_version,
         "model_name": model_display,
         "thinking": str(thinking),
-        "prompt_template": Path(config.get("prompt_path", "unknown")).stem,
+        # Legacy UI key; the value now identifies workflows for myteam runs.
+        "prompt_template": provenance["execution_identity"],
+        **provenance,
         "run_date": run_date,
         "run_timestamp": run_timestamp,
         "num_problems": num_problems,

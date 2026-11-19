@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 import yaml
 
 from slop_code.agent_runner.models import UsageTracker
@@ -20,6 +21,87 @@ from slop_code.common import RUN_INFO_FILENAME
 from slop_code.common import SNAPSHOT_DIR_NAME
 from slop_code.common.llms import TokenUsage
 from slop_code.execution.models import SetupConfig
+
+
+@pytest.fixture
+def interrupted_run(tmp_path: Path) -> Path:
+    """Reproduce an interrupted run whose summary lost completed states."""
+    names = [f"checkpoint_{index}" for index in range(1, 6)]
+    (tmp_path / RUN_INFO_FILENAME).write_text(
+        yaml.safe_dump(
+            {
+                "summary": {
+                    "error_type": "KeyboardInterrupt",
+                    "checkpoints": dict.fromkeys(
+                        names, CheckpointState.SKIPPED
+                    ),
+                }
+            }
+        )
+    )
+    for name in names:
+        directory = tmp_path / name
+        (directory / SNAPSHOT_DIR_NAME).mkdir(parents=True)
+        if name != "checkpoint_5":
+            (directory / INFERENCE_RESULT_FILENAME).write_text(
+                json.dumps(
+                    {"had_error": False, "usage": {"cost": 0.5, "steps": 1}}
+                )
+            )
+    return tmp_path
+
+
+def test_interrupted_skipped_summary_recovers_completed_artifacts(
+    interrupted_run: Path,
+) -> None:
+    names = [f"checkpoint_{index}" for index in range(1, 6)]
+    result = detect_resume_point(interrupted_run, names)
+
+    assert result is not None
+    assert result.resume_from_checkpoint == "checkpoint_5"
+    assert result.completed_checkpoints == names[:4]
+    assert result.invalidated_checkpoints == ["checkpoint_5"]
+    assert result.last_snapshot_dir == (
+        interrupted_run / "checkpoint_4" / SNAPSHOT_DIR_NAME
+    )
+    assert result.prior_usage.cost == 2.0
+
+
+@pytest.mark.parametrize("explicit_error", [False, True])
+def test_artifact_recovery_does_not_override_other_summary_states(
+    interrupted_run: Path, *, explicit_error: bool
+) -> None:
+    summary_path = interrupted_run / RUN_INFO_FILENAME
+    data = yaml.safe_load(summary_path.read_text())
+    if explicit_error:
+        data["summary"]["checkpoints"]["checkpoint_1"] = CheckpointState.ERROR
+    else:
+        data["summary"]["error_type"] = "RuntimeError"
+    summary_path.write_text(yaml.safe_dump(data))
+
+    result = detect_resume_point(
+        interrupted_run, [f"checkpoint_{index}" for index in range(1, 6)]
+    )
+
+    assert result is not None
+    assert result.resume_from_checkpoint == "checkpoint_1"
+    assert result.completed_checkpoints == []
+
+
+def test_interrupted_recovery_still_rejects_failed_inference(
+    interrupted_run: Path,
+) -> None:
+    (interrupted_run / "checkpoint_2" / INFERENCE_RESULT_FILENAME).write_text(
+        json.dumps({"had_error": True, "usage": {"cost": 0.25}})
+    )
+
+    result = detect_resume_point(
+        interrupted_run, [f"checkpoint_{index}" for index in range(1, 6)]
+    )
+
+    assert result is not None
+    assert result.resume_from_checkpoint == "checkpoint_2"
+    assert result.completed_checkpoints == ["checkpoint_1"]
 
 
 class TestSetupConfigResumeCommands:

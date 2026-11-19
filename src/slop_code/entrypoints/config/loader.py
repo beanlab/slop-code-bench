@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from slop_code.common import CONFIG_FILENAME
+from slop_code.common.workflow import workflow_provenance
 from slop_code.entrypoints.config.resolvers import register_resolvers
 from slop_code.entrypoints.config.run_config import ModelConfig
 from slop_code.entrypoints.config.run_config import OneShotConfig
@@ -263,7 +264,12 @@ def _build_interpolation_context(
         "env": {
             "name": env_data.get("name", "unknown"),
         },
-        "prompt": prompt_path.stem,
+        "prompt": (
+            Path(agent_data.get("workflow_dir", "example")).name
+            if agent_data.get("type") == "myteam"
+            else prompt_path.stem
+        ),
+        "workflow": Path(agent_data.get("workflow_dir", "example")).name,
         "model": {
             "name": model.name,
             "provider": model.provider,
@@ -306,7 +312,6 @@ def _resolve_save_template(
 
     # Clean up any trailing underscore before path separator or at end
     return resolved.replace("_/", "/").rstrip("_")
-
 
 
 def _get_default_config() -> dict[str, Any]:
@@ -544,6 +549,7 @@ def load_run_config(
         environment=env_data,
         prompt_path=prompt_path,
         prompt_content=prompt_content,
+        workflow=workflow_provenance(agent_data),
         model=model,
         thinking=thinking_preset,
         thinking_max_tokens=thinking_max_tokens,

@@ -27,6 +27,11 @@ IDENTITY_COLS = KEY_COLS + [
     "agent_version",
     "thinking",
     "prompt",
+    "task_template",
+    "execution_kind",
+    "execution_identity",
+    "workflow_name",
+    "workflow_hash",
     "timestamp",
     "idx",
     "state",
@@ -246,6 +251,7 @@ def consolidate_runs(
             checkpoint_record["agent_version"] = result.get("agent_version")
             checkpoint_record["thinking"] = result.get("thinking")
             checkpoint_record["prompt"] = result.get("prompt")
+            checkpoint_record.update(_execution_metadata(result))
             checkpoint_record["timestamp"] = timestamp
 
             all_checkpoints.append(checkpoint_record)
@@ -518,6 +524,20 @@ def check_mass_columns(record: dict[str, Any]) -> bool:
     return len(missing) > 0
 
 
+def _execution_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep workflow identity when exporting flattened reports."""
+    workflow = result.get("workflow") or {}
+    return {
+        "task_template": result.get("task_template", result.get("prompt")),
+        "execution_kind": result.get("execution_kind", "prompt"),
+        "execution_identity": result.get(
+            "execution_identity", result.get("prompt")
+        ),
+        "workflow_name": workflow.get("name"),
+        "workflow_hash": workflow.get("content_hash"),
+    }
+
+
 def flatten_result(
     result: dict[str, Any], setup: str, run_id: str, timestamp: str
 ) -> dict[str, Any]:
@@ -531,6 +551,7 @@ def flatten_result(
         "agent_version": result.get("agent_version"),
         "thinking": result.get("thinking"),
         "prompt": result.get("prompt"),
+        **_execution_metadata(result),
         "num_problems": result.get("num_problems"),
         "num_checkpoints": result.get("num_checkpoints"),
         "expected_checkpoints": result.get("expected_checkpoints"),

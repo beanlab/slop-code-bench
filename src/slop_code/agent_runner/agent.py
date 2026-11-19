@@ -29,6 +29,7 @@ from pydantic.fields import FieldInfo
 from slop_code.agent_runner.credentials import ProviderCredential
 from slop_code.agent_runner.models import AgentCostLimits
 from slop_code.agent_runner.models import AgentError
+from slop_code.agent_runner.models import AgentThreadUsage
 from slop_code.agent_runner.models import UsageTracker
 from slop_code.agent_runner.registry import register_agent_config
 from slop_code.agent_runner.trajectory import TrajectoryStep
@@ -162,6 +163,8 @@ class CheckpointInferenceResult(BaseModel):
         completed: Timestamp when execution completed
         elapsed: Time taken to execute the checkpoint in seconds
         usage: Token usage and cost tracking for this checkpoint
+        usage_by_agent: Per-thread usage keyed by agent path, for agents
+            that spawn subagents. Empty for single-thread agents.
         had_error: Whether an error occurred during execution
         error_message: Detailed error message if an error occurred
         checkpoint_path: Absolute path to the checkpoint output directory
@@ -173,6 +176,7 @@ class CheckpointInferenceResult(BaseModel):
     completed: datetime
     elapsed: float
     usage: UsageTracker
+    usage_by_agent: dict[str, AgentThreadUsage] = Field(default_factory=dict)
     had_error: bool
     error_message: str | None = None
     checkpoint_path: Path | None = None
@@ -217,6 +221,7 @@ class Agent(ABC):
         self.log = get_logger(f"agent_runner.{agent_name}-{problem_name}")
 
         self.usage = UsageTracker()
+        self.usage_by_agent: dict[str, AgentThreadUsage] = {}
         self.cost_limits = cost_limits
         self.pricing = pricing
         self.verbose = verbose
@@ -445,6 +450,7 @@ class Agent(ABC):
             completed=completed,
             elapsed=elapsed,
             usage=self.usage,
+            usage_by_agent=self.usage_by_agent,
             had_error=had_error,
             error_message=error,
         )
@@ -459,6 +465,7 @@ class Agent(ABC):
             self.reset()
         self.prior_cost += self.usage.cost
         self.usage = UsageTracker()
+        self.usage_by_agent = {}
 
 
 class StreamParser(Protocol):

@@ -212,6 +212,7 @@ Each agent type has its own configuration class with specific fields:
 | `gemini` | `GeminiConfig` | [Gemini](agents/gemini.md) |
 | `openhands` | `OpenHandsConfig` | [OpenHands](agents/openhands.md) |
 | `pi` | `PiConfig` | PI CLI agent |
+| `myteam` | `MyTeamConfig` | [Myteam workflows](agents/myteam.md) |
 
 ## PI Agent
 
