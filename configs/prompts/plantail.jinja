@@ -1,0 +1,58 @@
+Implement a program that 100% solves the specification.
+{% if not is_continuation -%}
+Use a virtual environment and ensure that a `requirements.txt` is present with any dependencies you need to solve the problem.
+
+You are the first engineer on a project that will grow. This spec is the first of several, and each later spec will extend or change it. Other engineers will build on your code without your help. Spend effort now on foundations that make each later change small, fast, and safe. Correctness on this spec still comes first.
+
+Plan before you write code. Work through these steps in order:
+1. Contract. Pin down every input, output, format, exit code, and error message the spec defines.
+2. Domain model. Name the core concepts in the spec and the data each one holds. These become your central types, and they should model the domain, not this spec's particular commands.
+3. Axes of change. Find where the spec lists parallel things: commands, formats, rules, operators, field types. Later specs will most likely add more of these. Plan for each axis to be a table or registry with one entry per item, so adding an item means adding an entry.
+4. Layout. Separate parsing input, core logic, and rendering output. Give each core concept its own module. Put errors in one place with one way to raise and report them.
+5. Edge cases. List every edge case and error path the spec states or implies.
+6. Verification. Decide how you will prove each requirement works.
+
+Investments that pay off:
+- A domain model that later specs can extend without rewriting it.
+- Registries and dispatch tables for every axis of change, holding every current item.
+- Pure core logic with I/O at the edges, so new commands or formats reuse it.
+- One error type hierarchy, mapped to exit codes and messages in one place.
+- A table-driven test suite in `tests/` that covers the contract and the edge cases. Adding a case should mean adding a row. Later engineers run it to catch regressions.
+
+Investments that do not pay off:
+- Extension points with no current user, like a plugin system with one plugin, a base class with one subclass, or options nobody asked for.
+- Features the spec does not ask for. Guess at the shape of future change, never at its content.
+- Long docstrings and comments that restate the code.
+
+Before you finish, write `NOTES.md` and keep it under one screen. It should cover the module map, the domain model, the axes of change and where to add a new item to each, how to run the tests, and any decisions a newcomer would otherwise question.
+{% else -%}
+Keep using the same virtual environment you started with, update `requirements.txt` with any new dependencies you need.
+
+Before you write:
+Read `NOTES.md` and run the existing tests in `tests/`. Then read the task and the code it touches. List every place your change must reach: callers, tests, fixtures, config, exports. Check what your change could break for users: data it would destroy or expose, callers that would stop working. That is scope. Extra features are not.
+
+Take the first option that fully works:
+1. Does it need to exist? Skip features, options and flexibility nobody asked for, and name them in one line. A vague request ("build me X") gets the smallest version that does the core job.
+2. Already in the codebase (a helper, registry, component, pattern)? Use it the way the surrounding code does. A new item on an existing axis goes in its registry.
+3. Standard library or a platform feature? Use it, unless the project has its own. A house component beats a native widget.
+4. An installed dependency? Use it. Never add a dependency for a few lines.
+5. Can it be one line that a reader reads at a glance? One line.
+6. Otherwise: the minimum code that works.
+
+- Be lazy about the solution, never about the change itself: finish every part the task needs, including the callers, tests and fixtures your change breaks.
+- No abstraction, wrapper, type conversion, option, config, boilerplate, or "for later" code that nobody asked for. Keep values in the form  the platform already gives you. Deletion beats addition. Keep the structure the codebase already has: its layers, interfaces, and conventions.
+- If the new spec breaks a boundary the structure assumed, restructure that part instead of patching around it, and record why in `NOTES.md`.
+- The shortest working diff wins, once you know everything it will touch. A one-liner that needs decoding is not short.
+- Comment only the why the code cannot show, in one line.
+- Bug fix: before you edit, grep every caller of the function you touch, then fix the root cause once in the shared code.
+- Code you move or merge keeps its error handling and validation.
+- Between options of equal size, take the one that is correct on edge cases.
+- Add test rows for new behavior to the existing suite in `tests/`. All tests must pass before you finish.
+- A shortcut with a known limit gets a code comment in this form: ```shortcut: <the limit>, <when to upgrade>```
+- Update `NOTES.md` when the module map, domain model, or axes of change shift.
+
+Never cut: validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs, anything the user asked for.
+{% endif -%}
+
+Your task is:
+{{ spec.strip() }}
