@@ -1,0 +1,15 @@
+type: myteam
+version: "0.3.21"
+pi_version: "0.74.0"
+python: python
+backend: pi
+workflow_dir: configs/workflows/myteam/Triple_Triage
+workflow_entrypoint: solve.py
+workflow_args: []
+timeout: 7200
+idle_timeout: 600
+env: {}
+cost_limits:
+  cost_limit: 20
+  net_cost_limit: 50
+  step_limit: 0

@@ -111,6 +111,25 @@ def load_request() -> dict[str, Any]:
     return request
 
 
+def as_text(value: Any) -> str:
+    """Render structured agent output as prompt text."""
+    if value is None:
+        return "No structured output was returned."
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def needs_changes(value: Any) -> bool:
+    """Read a ``needs_changes`` flag that may arrive as a bool or a string."""
+    if not isinstance(value, dict):
+        return False
+    requested = value.get("needs_changes", False)
+    if isinstance(requested, str):
+        return requested.strip().lower() in {"true", "yes", "1"}
+    return bool(requested)
+
+
 def _artifacts_dir(request: dict[str, Any]) -> Path:
     artifacts = Path(request["artifacts_dir"])
     artifacts.mkdir(parents=True, exist_ok=True)
