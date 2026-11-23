@@ -13,7 +13,7 @@ from pydantic import model_validator
 from slop_code.common.workflow import WorkflowProvenance
 from slop_code.evaluation import PassPolicy
 
-# outputs/<model>/<YYMMDD>_<problem>_<agent>_<prompt or workflow>_<thinking>_<run>_<user>
+# outputs/<model>/<YYMMDD>_<problem>_<agent config or MyTeam>_<prompt or workflow>_<thinking>_<run>_<user>
 DEFAULT_SAVE_TEMPLATE = (
     "${model.name}/${now:%y%m%d}_${problem}_${agent.label}_${prompt}"
     "_${thinking}_${run:}_${user:}"
@@ -121,7 +121,7 @@ class RunConfig(BaseModel):
 
     # Output path configuration with interpolation support
     # Available variables: ${model.name}, ${model.provider}, ${agent.type},
-    # ${agent.version}, ${agent.label}, ${prompt}, ${problem}, ${thinking},
+    # ${agent.version}, ${agent.config}, ${agent.label}, ${prompt}, ${problem}, ${thinking},
     # ${env.name}, ${now:FORMAT}, ${run:}, ${user:}
     # Note: ${agent.version} is cleanly omitted if the agent has no version
     save_dir: str = "outputs"

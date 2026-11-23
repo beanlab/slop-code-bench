@@ -412,6 +412,15 @@ problems:
             r"\d{6}_file_backup_claude_code_just-solve_low_1_test-user", name
         )
 
+    def test_output_name_uses_agent_config_name(self, tmp_path):
+        """The agent part is the config file name, not just the type."""
+        config = load_run_config(
+            cli_flags={"agent": "codex_with_cost_limits"},
+            cli_overrides=[f"save_dir={tmp_path}"],
+        )
+
+        assert "_codex_with_cost_limits_just-solve_" in config.output_path
+
     def test_run_number_skips_existing_directories(self, tmp_path):
         """${run:} picks the lowest number without an output directory."""
         config_file = tmp_path / "run.yaml"

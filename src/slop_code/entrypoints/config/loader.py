@@ -243,6 +243,7 @@ def _build_interpolation_context(
     model: ModelConfig,
     thinking_preset: ThinkingPresetType | None,
     problems: list[str] | None = None,
+    agent_path: Path | None = None,
 ) -> dict[str, Any]:
     """Build context dict for OmegaConf interpolation.
 
@@ -256,16 +257,20 @@ def _build_interpolation_context(
         model: Model configuration
         thinking_preset: The thinking preset value
         problems: Requested problem names; empty means auto-discovery
+        agent_path: Agent config file; inline configs fall back to the type
 
     Returns:
         Dict with interpolation context
     """
     agent_type = agent_data.get("type", "unknown")
+    agent_config = agent_path.stem if agent_path else agent_type
     return {
         "agent": {
             "type": agent_type,
             "version": agent_data.get("version"),  # Can be None
-            "label": "MyTeam" if agent_type == "myteam" else agent_type,
+            "config": agent_config,
+            # myteam runs name the workflow separately via ${prompt}.
+            "label": "MyTeam" if agent_type == "myteam" else agent_config,
         },
         "problem": _problem_label(problems or []),
         "env": {
@@ -545,6 +550,7 @@ def load_run_config(
         model=model,
         thinking_preset=thinking_preset,
         problems=problems,
+        agent_path=agent_path,
     )
 
     # 14. Resolve output path from root and template
