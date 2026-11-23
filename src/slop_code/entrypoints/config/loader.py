@@ -12,7 +12,9 @@ from pydantic import ValidationError
 
 from slop_code.common import CONFIG_FILENAME
 from slop_code.common.workflow import workflow_provenance
+from slop_code.entrypoints.config.resolvers import RUN_NUMBER_PLACEHOLDER
 from slop_code.entrypoints.config.resolvers import register_resolvers
+from slop_code.entrypoints.config.run_config import DEFAULT_SAVE_TEMPLATE
 from slop_code.entrypoints.config.run_config import ModelConfig
 from slop_code.entrypoints.config.run_config import OneShotConfig
 from slop_code.entrypoints.config.run_config import ResolvedRunConfig
@@ -240,6 +242,7 @@ def _build_interpolation_context(
     prompt_path: Path,
     model: ModelConfig,
     thinking_preset: ThinkingPresetType | None,
+    problems: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build context dict for OmegaConf interpolation.
 
@@ -252,15 +255,19 @@ def _build_interpolation_context(
         prompt_path: Path to the prompt template
         model: Model configuration
         thinking_preset: The thinking preset value
+        problems: Requested problem names; empty means auto-discovery
 
     Returns:
         Dict with interpolation context
     """
+    agent_type = agent_data.get("type", "unknown")
     return {
         "agent": {
-            "type": agent_data.get("type", "unknown"),
+            "type": agent_type,
             "version": agent_data.get("version"),  # Can be None
+            "label": "MyTeam" if agent_type == "myteam" else agent_type,
         },
+        "problem": _problem_label(problems or []),
         "env": {
             "name": env_data.get("name", "unknown"),
         },
@@ -278,9 +285,29 @@ def _build_interpolation_context(
     }
 
 
+def _problem_label(problems: list[str]) -> str:
+    if not problems:
+        return "all"
+    if len(problems) == 1:
+        return problems[0]
+    return f"{len(problems)}-problems"
+
+
+def _next_run_path(save_dir: str, resolved: str) -> str:
+    """Fill the run number with the lowest value not already on disk."""
+    run_number = 1
+    while (
+        Path(save_dir)
+        / resolved.replace(RUN_NUMBER_PLACEHOLDER, str(run_number))
+    ).exists():
+        run_number += 1
+    return resolved.replace(RUN_NUMBER_PLACEHOLDER, str(run_number))
+
+
 def _resolve_save_template(
     save_template: str,
     context: dict[str, Any],
+    save_dir: str = "",
 ) -> str:
     """Resolve output path template with interpolation.
 
@@ -290,6 +317,7 @@ def _resolve_save_template(
     Args:
         save_template: The output path template with ${...} placeholders
         context: The interpolation context dict
+        save_dir: Root that ${run:} numbers are counted against
 
     Returns:
         Resolved output path string with clean version handling
@@ -311,7 +339,8 @@ def _resolve_save_template(
         resolved = resolved.replace("__", "_")
 
     # Clean up any trailing underscore before path separator or at end
-    return resolved.replace("_/", "/").rstrip("_")
+    resolved = resolved.replace("_/", "/").rstrip("_")
+    return _next_run_path(save_dir, resolved)
 
 
 def _get_default_config() -> dict[str, Any]:
@@ -330,7 +359,7 @@ def _get_default_config() -> dict[str, Any]:
             "include_first_prefix": False,
         },
         "save_dir": "outputs",
-        "save_template": "${model.name}/${agent.type}-${agent.version}_${prompt}_${thinking}_${now:%Y%m%dT%H%M}",
+        "save_template": DEFAULT_SAVE_TEMPLATE,
     }
 
 
@@ -515,15 +544,18 @@ def load_run_config(
         prompt_path=prompt_path,
         model=model,
         thinking_preset=thinking_preset,
+        problems=problems,
     )
 
     # 14. Resolve output path from root and template
     save_dir = cfg_dict.get("save_dir", "outputs")
     save_template_raw = cfg_dict.get(
         "save_template",
-        "${model.name}/${agent.type}-${agent.version}_${prompt}_${thinking}_${now:%Y%m%dT%H%M}",
+        DEFAULT_SAVE_TEMPLATE,
     )
-    save_template = _resolve_save_template(save_template_raw, context)
+    save_template = _resolve_save_template(
+        save_template_raw, context, save_dir or ""
+    )
 
     # Combine root and template, handling empty root case
     output_path = f"{save_dir}/{save_template}" if save_dir else save_template

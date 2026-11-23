@@ -82,7 +82,10 @@ def _get_thinking_sort_value(thinking_str: str | None) -> int:
 
 
 def _extract_date_from_run_name(run_name: str) -> str:
-    """Extract date from run directory name (YYYYMMDD format)."""
+    """Extract the date from a YYMMDD_ prefix or an embedded YYYYMMDD."""
+    match = re.match(r"(\d{2})(\d{2})(\d{2})_", run_name)
+    if match:
+        return f"20{match[1]}-{match[2]}-{match[3]}"
     match = re.search(r"(202\d{5})", run_name)
     if match:
         date_str = match.group(1)

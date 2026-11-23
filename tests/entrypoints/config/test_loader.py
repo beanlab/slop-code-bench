@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -381,13 +382,56 @@ problems:
         # Template should be resolved (no ${} remaining)
         assert "${" not in config.save_template
         assert config.output_path.startswith("outputs/")
+        assert config.save_template.endswith("_test-user")
 
-    def test_agent_version_in_output_path(self):
-        """Test that agent version appears in output path when present."""
-        config = load_run_config(cli_overrides=["version=2.0.51"])
+    def test_agent_version_in_output_path(self, tmp_path):
+        """Test that ${agent.version} interpolates when present."""
+        config_file = tmp_path / "run.yaml"
+        config_file.write_text(
+            "save_template: ${agent.type}-${agent.version}\n"
+        )
+        config = load_run_config(
+            config_path=config_file, cli_overrides=["version=2.0.51"]
+        )
 
-        # Version should appear in the output path
         assert "2.0.51" in config.output_path
+
+    def test_default_output_name_format(self, tmp_path):
+        """Default names are YYMMDD_problem_agent_prompt_thinking_run_user."""
+        config_file = tmp_path / "run.yaml"
+        config_file.write_text(
+            f"save_dir: {tmp_path / 'out'}\nproblems: [file_backup]\n"
+        )
+        config = load_run_config(
+            config_path=config_file, cli_overrides=["thinking=low"]
+        )
+
+        model_dir, name = config.save_template.split("/")
+        assert model_dir == config.model.name
+        assert re.fullmatch(
+            r"\d{6}_file_backup_claude_code_just-solve_low_1_test-user", name
+        )
+
+    def test_run_number_skips_existing_directories(self, tmp_path):
+        """${run:} picks the lowest number without an output directory."""
+        config_file = tmp_path / "run.yaml"
+        config_file.write_text(f"save_dir: {tmp_path / 'out'}\n")
+        first = load_run_config(config_path=config_file)
+        Path(first.output_path).mkdir(parents=True)
+
+        second = load_run_config(config_path=config_file)
+
+        assert first.output_path.endswith("_1_test-user")
+        assert second.output_path.endswith("_2_test-user")
+
+    def test_problem_label_counts_multiple_problems(self, tmp_path):
+        config_file = tmp_path / "run.yaml"
+        config_file.write_text(
+            f"save_dir: {tmp_path / 'out'}\nproblems: [a, b, c]\n"
+        )
+        config = load_run_config(config_path=config_file)
+
+        assert "_3-problems_" in config.output_path
 
     def test_agent_version_omitted_when_missing(self, tmp_path):
         """Test that version is cleanly omitted when not in agent config."""
