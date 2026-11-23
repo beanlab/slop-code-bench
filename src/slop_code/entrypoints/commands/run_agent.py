@@ -1271,6 +1271,11 @@ def run_agent(
             typer.echo(typer.style(str(exc), fg=typer.colors.RED, bold=True))
             raise typer.Exit(1) from exc
 
+        # CLI problems replace config problems on fresh runs; the loader
+        # needs them to name the output directory.
+        if problem_names:
+            cli_flags["problems"] = list(problem_names)
+
         run_cfg = _load_and_validate_run_config(config, cli_flags, overrides)
 
         # Resolve output directory

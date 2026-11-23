@@ -266,6 +266,7 @@ class MyTeamAgent(Agent):
             "workflow_args": self.config.workflow_args,
             "artifacts_dir": str(root / "state/artifacts"),
             "cost_limits": self.cost_limits.model_dump(),
+            "pricing": self.pricing.model_dump() if self.pricing else None,
             "prior_cost": self.prior_cost,
             "timeout": self.config.timeout,
             "idle_timeout": self.config.idle_timeout,

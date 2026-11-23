@@ -111,6 +111,25 @@ def load_request() -> dict[str, Any]:
     return request
 
 
+def as_text(value: Any) -> str:
+    """Render structured agent output as prompt text."""
+    if value is None:
+        return "No structured output was returned."
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def needs_changes(value: Any) -> bool:
+    """Read a ``needs_changes`` flag that may arrive as a bool or a string."""
+    if not isinstance(value, dict):
+        return False
+    requested = value.get("needs_changes", False)
+    if isinstance(requested, str):
+        return requested.strip().lower() in {"true", "yes", "1"}
+    return bool(requested)
+
+
 def _artifacts_dir(request: dict[str, Any]) -> Path:
     artifacts = Path(request["artifacts_dir"])
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -279,6 +298,106 @@ def _repair_native_metadata(
             _lifecycle(request, "native_usage_unavailable")
 
 
+def _pricing_rates(
+    pricing: dict[str, Any], prompt_tokens: int
+) -> dict[str, Any]:
+    """Pick the cheapest prompt tier that fits, as APIPricing does."""
+    for tier in sorted(
+        pricing.get("prompt_tiers") or (),
+        key=lambda candidate: candidate["max_input_tokens"],
+    ):
+        if prompt_tokens <= tier["max_input_tokens"]:
+            return tier
+    return pricing
+
+
+def _token_cost(
+    rates: dict[str, Any],
+    uncached: int,
+    cache_read: int,
+    cache_write: int,
+    output: int,
+) -> float:
+    return (
+        uncached * rates.get("input", 0)
+        + cache_read * rates.get("cache_read", 0)
+        + cache_write * rates.get("cache_write", 0)
+        + output * rates.get("output", 0)
+    ) / 1_000_000
+
+
+def _native_costs(path: Path, pricing: dict[str, Any]) -> dict[str, float]:
+    costs: dict[str, float] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            message = entry
+        model = message.get("model")
+        usage = message.get("usage")
+        if not isinstance(model, str) or not isinstance(usage, dict):
+            continue
+
+        # PI's "input" excludes cache reads and writes.
+        uncached = int(usage.get("input", 0))
+        cache_read = int(usage.get("cacheRead", 0))
+        cache_write = int(usage.get("cacheWrite", 0))
+        rates = _pricing_rates(pricing, uncached + cache_read + cache_write)
+        costs[model] = costs.get(model, 0.0) + _token_cost(
+            rates,
+            uncached,
+            cache_read,
+            cache_write,
+            int(usage.get("output", 0)),
+        )
+    return costs
+
+
+def _apply_benchmark_pricing(
+    request: dict[str, Any], payload: dict[str, Any], native_path: Path
+) -> None:
+    """Replace PI's cost estimates with the benchmark's model pricing.
+
+    PI prices unknown model ids at a fallback rate. Tiers apply per request,
+    so costs come from the native per-message usage. Without that file the
+    session totals are priced at the standard prompt tier.
+    """
+    pricing = request.get("pricing")
+    if not pricing:
+        return
+    files = (
+        [native_path]
+        if native_path.is_file()
+        else list(native_path.rglob("*.jsonl"))
+    )
+    costs: dict[str, float] = {}
+    if len(files) == 1:
+        try:
+            costs = _native_costs(files[0], pricing)
+        except OSError:
+            costs = {}
+    if not costs:
+        _lifecycle(request, "native_pricing_unavailable")
+    for usage in payload.get("usage") or ():
+        model = usage.get("model")
+        if model in costs:
+            usage["estimated_cost"] = costs[model]
+            continue
+        cached = int(usage.get("cached_input_tokens", 0))
+        usage["estimated_cost"] = _token_cost(
+            _pricing_rates(pricing, 0),
+            max(0, int(usage.get("input_tokens", 0)) - cached),
+            cached,
+            0,
+            int(usage.get("output_tokens", 0)),
+        )
+
+
 def run_agent(**kwargs: Any) -> Any:
     """Run a headless PI session and persist its result and usage.
 
@@ -337,6 +456,7 @@ def run_agent(**kwargs: Any) -> Any:
             exception_type=type(error).__name__,
         )
     payload = result.to_jsonable()
+    _apply_benchmark_pricing(request, payload, native_path)
     _lifecycle(request, "session_finished", exit_code=result.exit_code)
     with _session_records(request) as (records_path, records):
         record = {

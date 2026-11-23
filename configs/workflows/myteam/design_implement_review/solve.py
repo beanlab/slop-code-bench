@@ -7,28 +7,12 @@ usage: no arguments; checkpoint inputs are supplied by the benchmark adapter
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from myteam.workflows import report_workflow_result
+from scb_myteam import as_text
 from scb_myteam import load_request
+from scb_myteam import needs_changes
 from scb_myteam import run_agent
-
-
-def _as_text(value: Any) -> str:
-    if value is None:
-        return "No structured output was returned."
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, indent=2, sort_keys=True)
-
-
-def _needs_changes(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-    requested = value.get("needs_changes", False)
-    if isinstance(requested, str):
-        return requested.strip().lower() in {"true", "yes", "1"}
-    return bool(requested)
 
 DESIGN_PROMPT = (
     "Design an approach for the benchmark task below. Inspect the "
@@ -55,6 +39,7 @@ IMPLEMENTATION_FIX_PROMPT = (
     "\n\nDesign plan:\n{{ plan }}\n\nReview findings:\n{{ review }}"
 )
 
+
 def main() -> None:
     task = load_request()["task"]
 
@@ -63,7 +48,7 @@ def main() -> None:
         input={"task": task},
         output={"plan": "A concise implementation plan."},
     )
-    plan = _as_text(design.output)
+    plan = as_text(design.output)
 
     implementation = run_agent(
         prompt=IMPLEMENTATION_PROMPT,
@@ -71,7 +56,7 @@ def main() -> None:
         output={"summary": "Describe the implementation and validation."},
     )
 
-    implementation_summary = _as_text(implementation.output)
+    implementation_summary = as_text(implementation.output)
     review = None
     for round_number in range(3):
         review = run_agent(
@@ -86,7 +71,7 @@ def main() -> None:
                 "needs_changes": "Boolean: whether the implementation agent must make changes.",
             },
         )
-        if not _needs_changes(review.output) or round_number == 2:
+        if not needs_changes(review.output) or round_number == 2:
             break
 
         implementation = run_agent(
@@ -94,12 +79,12 @@ def main() -> None:
             input={
                 "task": task,
                 "plan": plan,
-                "review": _as_text(review.output),
+                "review": as_text(review.output),
             },
             output={"summary": "Describe the changes and validation."},
             session_id=implementation.session_id,
         )
-        implementation_summary = _as_text(implementation.output)
+        implementation_summary = as_text(implementation.output)
 
     report_workflow_result(
         json.dumps(

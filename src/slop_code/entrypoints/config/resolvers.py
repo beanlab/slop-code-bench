@@ -6,7 +6,12 @@ from datetime import datetime
 
 from omegaconf import OmegaConf
 
+from slop_code.common.github import github_username
+
 _RESOLVERS_REGISTERED = False
+
+# ${run:} resolves to this marker; the loader swaps in the next free number.
+RUN_NUMBER_PLACEHOLDER = "@RUN@"
 
 
 def register_resolvers() -> None:
@@ -27,6 +32,8 @@ def register_resolvers() -> None:
         - ${prompt}: Set to prompt file stem during resolution
         - ${thinking}: Set to thinking preset string during resolution
         - ${env.name}: From resolved environment config
+        - ${user:}: GitHub login from $SCB_GITHUB_USER or the gh CLI
+        - ${run:}: Lowest run number whose output directory does not exist
     """
     global _RESOLVERS_REGISTERED
     if _RESOLVERS_REGISTERED:
@@ -37,6 +44,19 @@ def register_resolvers() -> None:
     OmegaConf.register_new_resolver(
         "now",
         lambda fmt="%Y%m%dT%H%M": datetime.now().strftime(fmt),
+        replace=True,
+    )
+
+    # ${user:} -> GitHub login, resolved only when a template uses it
+    OmegaConf.register_new_resolver(
+        "user",
+        lambda: github_username(),
+        replace=True,
+    )
+
+    OmegaConf.register_new_resolver(
+        "run",
+        lambda: RUN_NUMBER_PLACEHOLDER,
         replace=True,
     )
 

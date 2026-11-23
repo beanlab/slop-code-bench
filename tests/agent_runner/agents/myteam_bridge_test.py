@@ -424,3 +424,59 @@ def test_native_file_repairs_missing_metadata_and_resumes_known_file(
     assert (
         _records(workflow_request)[1]["usage_delta"][0]["estimated_cost"] == 0
     )
+
+
+def test_benchmark_pricing_replaces_pi_cost_per_message(
+    workflow_request: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow_request["pricing"] = {
+        "input": 2.0,
+        "output": 3.0,
+        "cache_read": 0.2,
+        "cache_write": 0,
+        "prompt_tiers": [
+            {
+                "max_input_tokens": 1000,
+                "input": 1.0,
+                "output": 2.0,
+                "cache_read": 0.1,
+                "cache_write": 0,
+            }
+        ],
+    }
+    _write_workflow_request(monkeypatch, workflow_request)
+    module = ModuleType("myteam")
+    messages = [
+        {"input": 400, "cacheRead": 500, "output": 100},
+        {"input": 600, "cacheRead": 900, "output": 100},
+    ]
+
+    def run_agent(**kwargs: Any) -> FakeResult:
+        options = kwargs["extra_args"]
+        native = Path(options[options.index("--session-dir") + 1])
+        (native / "native.jsonl").write_text(
+            "\n".join(
+                json.dumps(
+                    {
+                        "message": {
+                            "model": "test-model",
+                            "usage": {**usage, "cost": {"total": 99}},
+                        }
+                    }
+                )
+                for usage in messages
+            )
+        )
+        return FakeResult(cost=99)
+
+    module.run_agent = run_agent
+    monkeypatch.setitem(sys.modules, "myteam", module)
+
+    scb_myteam.run_agent(prompt="Price me")
+
+    # First message fits the 1000-token tier; the second uses base rates.
+    expected = (400 * 1.0 + 500 * 0.1 + 100 * 2.0) / 1e6 + (
+        600 * 2.0 + 900 * 0.2 + 100 * 3.0
+    ) / 1e6
+    delta = _records(workflow_request)[0]["usage_delta"][0]
+    assert delta["estimated_cost"] == pytest.approx(expected)

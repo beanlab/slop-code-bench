@@ -33,3 +33,9 @@ def skip_if_no_docker():
     """Skip test if Docker is not available."""
     if not is_docker_available():
         pytest.skip("Docker is not available")
+
+
+@pytest.fixture(autouse=True)
+def _github_user(monkeypatch):
+    """Keep ${user:} templates off the gh CLI."""
+    monkeypatch.setenv("SCB_GITHUB_USER", "test-user")
